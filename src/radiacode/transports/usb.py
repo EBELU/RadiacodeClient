@@ -1,7 +1,8 @@
 import struct
 import usb.core
 
-from radiacode.bytes_buffer import BytesBuffer
+from ..bytes_buffer import BytesBuffer
+from ..logger import logger
 
 
 class DeviceNotFound(Exception):
@@ -22,19 +23,53 @@ class Usb:
         _pid = 0xF123
 
         if serial_number:
-            self._device = usb.core.find(idVendor=_vid, idProduct=_pid, serial_number=serial_number)
+            self._device = usb.core.find(
+                idVendor=_vid,
+                idProduct=_pid,
+                serial_number=serial_number
+            )
         else:
-            # usb.core.find(..., serial_number=None) will attempt to match against a value of None,
-            # rather than ignoring it as a match condition.
-            self._device = usb.core.find(idVendor=_vid, idProduct=_pid)
-        self._timeout_ms = timeout_ms
+            self._device = usb.core.find(
+                idVendor=_vid,
+                idProduct=_pid
+            )
+
         if self._device is None:
             raise DeviceNotFound
-        while True:
-            try:
-                self._device.read(0x81, 256, timeout=100)
-            except usb.core.USBTimeoutError:
-                break
+
+        self._timeout_ms = timeout_ms
+        # Detach kernel driver if active
+        try:
+            if self._device.is_kernel_driver_active(0):
+                self._device.detach_kernel_driver(0)
+        except usb.core.USBError:
+            pass  # Some backends/OSes may throw here, ignore
+
+        # Set configuration safely
+        try:
+            self._device.set_configuration()
+        except usb.core.USBError as e:
+            # If it's busy, try resetting device
+            if e.errno == 16:
+                self._device.reset()
+                self._device.set_configuration()
+            else:
+                raise
+
+        cfg = self._device.get_active_configuration()
+        intf = cfg[(0, 0)]
+        self._interface_number = intf.bInterfaceNumber
+
+        self._kernel_was_attached = False
+        if self._device.is_kernel_driver_active(self._interface_number):
+            self._device.detach_kernel_driver(self._interface_number)
+            self._kernel_was_attached = True
+        
+        try:
+            usb.util.claim_interface(self._device, self._interface_number)
+        except usb.core.USBError:
+            logger.error("Claim failed")
+            return
 
     def execute(self, request: bytes) -> BytesBuffer:
         self._device.write(0x1, request)
@@ -42,12 +77,17 @@ class Usb:
         trials = 0
         max_trials = 3
         while trials < max_trials:  # repeat until non-zero lenght data received
-            data = self._device.read(0x81, 256, timeout=self._timeout_ms).tobytes()
+            try:
+                data = self._device.read(0x81, 256, timeout=self._timeout_ms).tobytes()
+            except usb.core.USBTimeoutError:
+                trials += 1
+                continue
             if len(data) != 0:
                 break
             else:
                 trials += 1
         if trials >= max_trials:
+            logger.critical(str(trials) + ' USB Read Failures in sequence')
             raise MultipleUSBReadFailure(str(trials) + ' USB Read Failures in sequence')
 
         response_length = struct.unpack_from('<I', data)[0]
@@ -58,3 +98,28 @@ class Usb:
             data += r
 
         return BytesBuffer(data)
+    
+    def stop(self):
+        if not self._device:
+            return
+
+        try:
+            cfg = self._device.get_active_configuration()
+            intf = cfg[(0, 0)]
+            interface_number = intf.bInterfaceNumber
+
+            try:
+                usb.util.release_interface(self._device, interface_number)
+            except Exception as e:
+                logger.error("Release failed:", e)
+
+            if getattr(self, "_kernel_was_attached", False):
+                try:
+                    self._device.attach_kernel_driver(interface_number)
+                except Exception as e:
+                    logger.error("Reattach failed:", e)
+
+        finally:
+            usb.util.dispose_resources(self._device)
+            self._device = None
+            logger.info(f"USB conncection closed")

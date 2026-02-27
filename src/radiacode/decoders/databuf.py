@@ -1,7 +1,7 @@
 import datetime
 
-from radiacode.bytes_buffer import BytesBuffer
-from radiacode.types import DoseRateDB, Event, EventId, RareData, RawData, RealTimeData
+from ..bytes_buffer import BytesBuffer
+from ..types import DoseRateDB, Event, EventId, RareData, RawData, RealTimeData
 
 
 def decode_VS_DATA_BUF(

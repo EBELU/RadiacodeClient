@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .types import RealTimeData, RawData, RareData
-from radiacode import RadiaCode
+from .radiacode import RadiaCode
+from .logger import logger
 
 @dataclass(frozen=True)
 class CurrentValuesPackage:
@@ -18,6 +19,8 @@ class StatusPackage:
     battery: int
     temperature: float
     charging: bool
+    acc_dose: float
+    dose_acc_time: float
     timestamp: float
 
 @dataclass(frozen=True)
@@ -29,9 +32,15 @@ class SpectrumResult:
     timestamp: float
 
 class RadiacodeAsync:
-    def __init__(self, address):
+    def __init__(self, address, usb = False):
         self.address = address
-        self.client = RadiaCode(self.address)
+        self._usb = usb
+        
+        try:
+            self.name = address.name
+        except AttributeError:
+            self.name = str(address)
+            
         self._lock = asyncio.Lock()
         
         self._latest_cps = None
@@ -42,7 +51,7 @@ class RadiacodeAsync:
         self._poll_task = None
         self._pending_request = False
         
-        self.stopped = False
+        self._stopped = False
         self._running = False
         
         self.update_task = None
@@ -59,7 +68,7 @@ class RadiacodeAsync:
     @property
     def LatestSpectrum(self):
         if self.update_task is None or self.update_task.done():
-            self.update_task = asyncio.create_task(self._update_current())
+            self.update_task = asyncio.create_task(self._update_current(True))
         return self._latest_spectrum 
     
     @property
@@ -67,35 +76,46 @@ class RadiacodeAsync:
         return self._latest_status
         
     async def start(self):
-        self.running = True
+        if self._usb:
+            self.client = await asyncio.to_thread(RadiaCode, None, self.address)
+            logger.info(f"Radiacode {self.name} successfully connected by USB")
+        else:
+            self.client = RadiaCode(self.address)
+            logger.info(f"Radiacode {self.name} successfully connected by BLE")
+        self._running = True
         
     async def stop(self):
-        self.stopped = True
+        self._stopped = True
+        self.client.stop()
+        if self.update_task is not None and not self.update_task.done():
+            await self.update_task.cancel()
         
     def reset(self):
         self.client.spectrum_reset()
 
         
     # ---------------- INTERNAL ----------------
-    async def _update_current(self):
+    async def _update_current(self, get_spectrum = False):
         if self._pending_request:
             return  # don't start multiple simultaneous requests
         self._pending_request = True
         try:
             loop = asyncio.get_running_loop()
             data = await loop.run_in_executor(None, self.client.data_buf)
-            spectrum = await loop.run_in_executor(None, self.client.spectrum)
-            
             self.decode_cps_packet(data)
-            
-            self._latest_spectrum = SpectrumResult(np.array(spectrum.counts), sum(spectrum.counts), spectrum.duration.total_seconds(), 
-                                                 [spectrum.a0, spectrum.a1, spectrum.a2], time.time())
+            if get_spectrum:
+                spectrum = await loop.run_in_executor(None, self.client.spectrum)
+                
+                self._latest_spectrum = SpectrumResult(np.array(spectrum.counts), sum(spectrum.counts), spectrum.duration.total_seconds(), 
+                                                    [spectrum.a2, spectrum.a1, spectrum.a0], time.time())
         except Exception as e:
-            print(str(e))  # could log error
+            logger.error(f"Update task failed with {e}")  # could log error
         finally:
             self._pending_request = False
             
     def decode_cps_packet(self, data: list):
         for packet in data:
             if isinstance(packet, RealTimeData):
-                self._latest_cps = CurrentValuesPackage(packet.count_rate, packet.dose_rate, packet.dt.timestamp())
+                self._latest_cps = CurrentValuesPackage(packet.count_rate, packet.dose_rate * 1e4, packet.dt.timestamp())
+            elif isinstance(packet, RareData):
+                self._latest_status = StatusPackage(packet.charge_level, packet.charge_level, False, packet.dose, packet.duration, packet.dt.timestamp())

@@ -1,7 +1,7 @@
 import datetime
 
-from radiacode.bytes_buffer import BytesBuffer
-from radiacode.types import Spectrum
+from ..bytes_buffer import BytesBuffer
+from ..types import Spectrum
 
 
 def decode_counts_v0(br: BytesBuffer) -> list[int]:

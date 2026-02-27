@@ -10,12 +10,12 @@ import platform
 import struct
 from typing import Optional
 
-from radiacode.bytes_buffer import BytesBuffer
-from radiacode.decoders.databuf import decode_VS_DATA_BUF
-from radiacode.decoders.spectrum import decode_RC_VS_SPECTRUM
-from radiacode.transports.bluetooth import Bluetooth
-from radiacode.transports.usb import Usb
-from radiacode.types import (
+from .bytes_buffer import BytesBuffer
+from .decoders.databuf import decode_VS_DATA_BUF
+from .decoders.spectrum import decode_RC_VS_SPECTRUM
+from .transports.bluetooth import Bluetooth
+from .transports.usb import Usb
+from .types import (
     _VSFR_FORMATS,
     COMMAND,
     CTRL,
@@ -109,6 +109,9 @@ class RadiaCode:
 
     def base_time(self) -> datetime.datetime:
         return self._base_time
+    
+    def stop(self):
+        self._connection.stop()
 
     def execute(self, reqtype: COMMAND, args: Optional[bytes] = None) -> BytesBuffer:
         req_seq_no = 0x80 + self._seq
