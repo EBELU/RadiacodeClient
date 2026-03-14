@@ -43,11 +43,6 @@ def scan_all_usb():
 
     return results
 
-
-
-
-
-
 async def poll_device(rc: RadiacodeAsync):
     while True:
         try:
@@ -75,7 +70,7 @@ async def main():
     logging.info("Starting debug session")
     usb_d = scan_all_usb()
     print("USB found:", usb_d)
-    rc = RadiacodeAsync(usb_d[0]["serial_number"], True)
+    rc = RadiacodeAsync(DEVICE_MAC)
 
     logging.info("Connecting to device...")
     await rc.start()

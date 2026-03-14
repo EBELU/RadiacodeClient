@@ -34,7 +34,7 @@ class Bluetooth:
         self._resp_size = 0
         self._response_future: asyncio.Future | None = None
         
-        self.connection_attemps = 5
+        self.connection_attemps = 2
 
         # Dedicated event loop + thread
         self._loop = asyncio.new_event_loop()
@@ -171,7 +171,7 @@ class Bluetooth:
                 await self._client.disconnect()
 
         fut = asyncio.run_coroutine_threadsafe(_cleanup(), self._loop)
-        fut.result()
+        fut.result(timeout=5)
 
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()

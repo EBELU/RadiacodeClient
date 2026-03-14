@@ -72,16 +72,24 @@ class RadiacodeAsync:
         return self._latest_spectrum 
     
     @property
-    def LastestStatus(self):
+    def LatestStatusData(self):
         return self._latest_status
         
     async def start(self):
-        if self._usb:
-            self.client = await asyncio.to_thread(RadiaCode, None, self.address)
-            logger.info(f"Radiacode {self.name} successfully connected by USB")
-        else:
-            self.client = RadiaCode(self.address)
-            logger.info(f"Radiacode {self.name} successfully connected by BLE")
+        try:
+            if self._usb:
+                self.client = await asyncio.to_thread(RadiaCode, None, self.address)
+                logger.info(f"Radiacode {self.name} successfully connected by USB")
+            else:
+                self.client = RadiaCode(self.address)
+                logger.info(f"Radiacode {self.name} successfully connected by BLE")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.critical(f"Connection failed with exception {e}")
+            self.client = None
+            await self.stop()
+            return
         self._running = True
         
     async def stop(self):
@@ -92,6 +100,9 @@ class RadiacodeAsync:
         
     def reset(self):
         self.client.spectrum_reset()
+        
+    def set_calibration(self, calib_coeff):
+        self.client.set_energy_calib(calib_coeff)
 
         
     # ---------------- INTERNAL ----------------
@@ -106,8 +117,11 @@ class RadiacodeAsync:
             if get_spectrum:
                 spectrum = await loop.run_in_executor(None, self.client.spectrum)
                 
-                self._latest_spectrum = SpectrumResult(np.array(spectrum.counts), sum(spectrum.counts), spectrum.duration.total_seconds(), 
-                                                    [spectrum.a2, spectrum.a1, spectrum.a0], time.time())
+                self._latest_spectrum = SpectrumResult(np.array(spectrum.counts), 
+                                                       sum(spectrum.counts), 
+                                                       spectrum.duration.total_seconds(), 
+                                                       [spectrum.a2, spectrum.a1, spectrum.a0], 
+                                                       time.time())
         except Exception as e:
             logger.error(f"Update task failed with {e}")  # could log error
         finally:
@@ -118,4 +132,4 @@ class RadiacodeAsync:
             if isinstance(packet, RealTimeData):
                 self._latest_cps = CurrentValuesPackage(packet.count_rate, packet.dose_rate * 1e4, packet.dt.timestamp())
             elif isinstance(packet, RareData):
-                self._latest_status = StatusPackage(packet.charge_level, packet.charge_level, False, packet.dose, packet.duration, packet.dt.timestamp())
+                self._latest_status = StatusPackage(packet.charge_level, packet.temperature, False, packet.dose, packet.duration, packet.dt.timestamp())

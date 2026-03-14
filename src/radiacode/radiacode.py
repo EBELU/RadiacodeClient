@@ -15,6 +15,7 @@ from .decoders.databuf import decode_VS_DATA_BUF
 from .decoders.spectrum import decode_RC_VS_SPECTRUM
 from .transports.bluetooth import Bluetooth
 from .transports.usb import Usb
+from .logger import logger
 from .types import (
     _VSFR_FORMATS,
     COMMAND,
@@ -83,11 +84,15 @@ class RadiaCode:
 
         # Bluepy doesn't support MacOS: https://github.com/IanHarvey/bluepy/issues/44
         self._bt_supported = platform.system() != 'Darwin'
+        
+        
 
         if bluetooth_mac is not None and self._bt_supported is True:
             self._connection = Bluetooth(bluetooth_mac)
-        else:
+        elif bluetooth_mac is None and self.serial_number is not None:
             self._connection = Usb(serial_number=serial_number)
+        else:
+            raise RuntimeError("Connection failed")
 
         # init
         self.execute(COMMAND.SET_EXCHANGE, b'\x01\xff\x12\xff')
@@ -121,7 +126,11 @@ class RadiaCode:
         request = req_header + (args or b'')
         full_request = struct.pack('<I', len(request)) + request
 
-        response = self._connection.execute(full_request)
+        try:
+            response = self._connection.execute(full_request)
+        except Exception as e:
+            logger.error(f"Execute threw exception {e}")
+            raise
         resp_header = response.unpack('<4s')[0]
         assert req_header == resp_header, f'req={req_header.hex()} resp={resp_header.hex()}'
         return response
